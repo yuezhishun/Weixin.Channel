@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/Weixin.Channel/Weixin.Channel.csproj" />
+  <Project Path="samples/Weixin.Cli/Weixin.Cli.csproj" />
+  <Project Path="samples/Weixin.Web/Weixin.Web.csproj" />
+  <Project Path="tests/Weixin.Channel.Tests/Weixin.Channel.Tests.csproj" />
+</Solution>

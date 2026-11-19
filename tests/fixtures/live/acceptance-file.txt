@@ -1,0 +1,4 @@
+Weixin .NET 11 live acceptance
+中文验收标记：文件收发 ✅ 😀 🚀
+# Markdown 验收
+**中文验收标记**

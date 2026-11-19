@@ -1,0 +1,18 @@
+using System.Text.Json;
+using Weixin.Channel;
+
+var stateDirectory = Path.Combine(Path.GetTempPath(), "weixin-consumer-state-" + Guid.NewGuid().ToString("N"));
+await using (var channel = new WeixinChannel(new WeixinOptions { StateDirectory = stateDirectory }))
+{
+    if (channel.GetAccounts().Count != 0 || channel.GetInbox().Count != 0)
+        throw new InvalidOperationException("独立状态目录不应继承任何账号或消息。");
+    if (await channel.ClaimAsync() is not null) throw new InvalidOperationException("空 inbox 不应产生投递。");
+    var request = new SendRequest { PeerId = "consumer-test", Text = "独立消费者" };
+    if (!JsonSerializer.Serialize(request).Contains("consumer-test", StringComparison.Ordinal))
+        throw new InvalidOperationException("公共契约不可序列化。");
+}
+await using (var reopened = new WeixinChannel(new WeixinOptions { StateDirectory = stateDirectory }))
+{
+    if (reopened.GetAccounts().Count != 0) throw new InvalidOperationException("状态目录不能正确重开。");
+}
+Console.WriteLine("独立 nupkg 消费通过：无 ProjectReference/AgentFlow/Node 依赖，SQLite 打开、查询、关闭与重开正常。");
