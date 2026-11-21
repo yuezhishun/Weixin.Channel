@@ -6,12 +6,12 @@
 | --- | --- | --- | --- |
 | Tencent openclaw-weixin | 2.4.10 / `874637a0dbc24050f72d1385add4fc6170a2d726` | 协议/渠道业务源码参考 | [Tencent-MIT.txt](Tencent-MIT.txt) |
 | DrAbc.SilkCodec | 1.0.0 / `fed50705d363e28786c6f98b1fe9a9b11c15664a` | 纯 C# SILK 解码 | [SilkCodec-MIT.txt](SilkCodec-MIT.txt) |
-| Microsoft.Data.Sqlite/Core | 11.0.0-rc.3.26522.148 | SQLite持久化 | [Microsoft-MIT.txt](Microsoft-MIT.txt) |
+| Microsoft.Data.Sqlite/Core | 11.0.0 | SQLite持久化 | [Microsoft-MIT.txt](Microsoft-MIT.txt) |
 | SQLitePCLRaw bundle/config/core/provider | 3.0.5 / `ed046114d5a30534e13294d94d78eb73de896ad4` | SQLite平台加载 | [SQLitePCLRaw-Apache-2.0.txt](SQLitePCLRaw-Apache-2.0.txt) |
 | SQLite | 3.53.4 | Windows/Linux原生SQLite | [SQLite.txt](SQLite.txt)，Public Domain |
 | QRCoder | 1.8.1 / `d050cc7c0bc986f14cfedf24b947e0ec5c1a7736` | CLI ASCII / Web PNG二维码 | [QRCoder-MIT.txt](QRCoder-MIT.txt) |
-| Microsoft.AspNetCore.OpenApi | 10.0.11 | Web OpenAPI文档 | [Microsoft-MIT.txt](Microsoft-MIT.txt) |
-| Microsoft.OpenApi | 2.7.5 | OpenAPI模型/序列化 | [Microsoft-OpenAPI-MIT.txt](Microsoft-OpenAPI-MIT.txt) |
+| Microsoft.AspNetCore.OpenApi | 11.0.0 | Web OpenAPI文档 | [Microsoft-MIT.txt](Microsoft-MIT.txt) |
+| Microsoft.OpenApi | 3.11.0 | OpenAPI模型/序列化 | [Microsoft-OpenAPI-MIT.txt](Microsoft-OpenAPI-MIT.txt) |
 
 完整解析版本、依赖和内容哈希以各项目 `packages.lock.json` 为准。Microsoft 运行时与 SDK 使用其自身分发中的许可。测试项目另使用 Microsoft.NET.Test.Sdk、xUnit、xunit.runner.visualstudio、Microsoft.Extensions.TimeProvider.Testing；它们仅参与验证，不随 Weixin.Channel nupkg 作为运行时依赖分发。
 

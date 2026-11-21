@@ -29,6 +29,8 @@ client.DefaultRequestHeaders.Add("x-weixin-request", "1");
 var openapiText = await client.GetStringAsync("/openapi/v1.json", timeout.Token);
 File.WriteAllText(Path.Combine(evidenceDirectory, "openapi.json"), openapiText);
 var openapi = JsonNode.Parse(openapiText)!.AsObject();
+Check(openapi["openapi"]?.GetValue<string>().StartsWith("3.1.", StringComparison.Ordinal) == true,
+    "OpenAPI 应保持 3.1，以兼容现有客户端生成工具。");
 VerifyContract();
 Seed();
 var before = Snapshot();

@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>Weixin.Channel</PackageId>
-    <Version>1.0.0-rc.2</Version>
+    <Version>1.0.0-rc.3</Version>
     <Description>独立微信 iLink 渠道库</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.3.26522.148" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="11.0.0" />
     <PackageReference Include="DrAbc.SilkCodec" Version="1.0.0" />
     <InternalsVisibleTo Include="Weixin.Channel.Tests" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />

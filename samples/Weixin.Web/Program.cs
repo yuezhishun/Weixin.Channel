@@ -1,13 +1,14 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
+using Microsoft.OpenApi;
 using QRCoder;
 using Weixin.Channel;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://127.0.0.1:3083");
 builder.Services.AddProblemDetails();
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(options => options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1);
 builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 var app = builder.Build();
 var stateDirectory = builder.Configuration["state"] ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Weixin.Channel");

@@ -1,6 +1,6 @@
 # 验收与服务器部署
 
-本指南说明独立 Weixin.Web 手动网关的部署。目标平台为 Windows x64 和 Ubuntu 24.04 x64，构建 SDK 固定为 `11.0.100-rc.3.26522.148`。
+本指南说明独立 Weixin.Web 手动网关的部署。目标平台为 Windows x64 和 Ubuntu 24.04 x64，构建 SDK 固定为正式版 `11.0.100`。
 
 历史真机结果及未通过项见[验收记录](acceptance.md)和[进度诊断](progress-diagnosis.md)。本次交付的自动化结果以构建目录中的 TRX 为准。
 
@@ -41,7 +41,7 @@ WEIXIN_DOTNET=/path/to/dotnet bash scripts/build.sh
 当前仓库统一声明`win-x64;linux-x64`，标准`packages.lock.json`已包含两套目标图，可直接执行locked发布：
 
 ```bash
-# 在仓库根目录，dotnet 指向11.0.100-rc.3.26522.148
+# 在仓库根目录，dotnet 指向 11.0.100
 dotnet --version
 dotnet restore Weixin.Channel.slnx --locked-mode
 

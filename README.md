@@ -8,7 +8,7 @@
 
 ## 构建与打包
 
-需要 .NET SDK `11.0.100-rc.3.26522.148`。Windows x64 与 Linux x64 分别执行，脚本拒绝错误 SDK、测试失败或跳过测试。第一次修改依赖后由维护者执行普通 `dotnet restore Weixin.Channel.slnx` 更新四个 `packages.lock.json`；正常交付只使用 locked restore。
+需要正式版 .NET SDK `11.0.100`。Windows x64 与 Linux x64 分别执行，脚本拒绝错误 SDK、测试失败或跳过测试。修改依赖后由维护者重新生成解决方案及 Web 烟雾测试夹具的 NuGet 锁文件。正常交付使用 locked restore。
 
 ```powershell
 # 在本目录；可通过 -Dotnet 指定独立安装的 SDK
@@ -19,7 +19,7 @@
 WEIXIN_DOTNET=/path/to/dotnet bash scripts/build.sh
 ```
 
-脚本按锁定还原、Release 构建、测试、自包含发布、发布程序验收、NuGet 打包和独立消费者验证的顺序执行。NuGet 包位于 `artifacts/packages/<RID>/Weixin.Channel.1.0.0-rc.2.nupkg`，平台归档为 `artifacts/Weixin.Channel-<RID>-<时间戳>.zip` 或 `.tar.gz`。日志、TRX 和归档 SHA-256 位于 `artifacts/verification/`。独立消费者通过 `PackageReference` 和隔离包缓存验证 SQLite 状态创建与重开。
+脚本按锁定还原、Release 构建、测试、自包含发布、发布程序验收、NuGet 打包和独立消费者验证的顺序执行。NuGet 包位于 `artifacts/packages/<RID>/Weixin.Channel.1.0.0-rc.3.nupkg`，平台归档为 `artifacts/Weixin.Channel-<RID>-<时间戳>.zip` 或 `.tar.gz`。日志、TRX 和归档 SHA-256 位于 `artifacts/verification/`。独立消费者通过 `PackageReference` 和隔离包缓存验证 SQLite 状态创建与重开。
 
 ## 运行自包含发布包
 

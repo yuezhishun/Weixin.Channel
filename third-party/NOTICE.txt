@@ -5,12 +5,12 @@ Copyright (C) 2026 Tencent. All rights reserved. MIT。
 协议与渠道行为已由 TypeScript 移植为 C#；保留 Tencent-MIT.txt。
 
 DrAbc.SilkCodec 1.0.0。Copyright (c) 2026 Dr.Abc. MIT。
-Microsoft.Data.Sqlite/Core 11.0.0-rc.3.26522.148。Copyright (c) .NET Foundation and Contributors. MIT。
+Microsoft.Data.Sqlite/Core 11.0.0。Copyright (c) .NET Foundation and Contributors. MIT。
 SQLitePCLRaw 3.0.5。Copyright 2014-2025 SourceGear, LLC. Apache-2.0。
 SQLite 3.53.4。Public Domain。
 
 示例宿主额外使用：
 QRCoder 1.8.1。Copyright (c) 2013-2025 Raffael Herrmann；2024-2025 Shane Krueger. MIT。
-Microsoft.AspNetCore.OpenApi 10.0.11 / Microsoft.OpenApi 2.7.5。Copyright (c) Microsoft Corporation. MIT。
+Microsoft.AspNetCore.OpenApi 11.0.0 / Microsoft.OpenApi 3.11.0。Copyright (c) Microsoft Corporation. MIT。
 
 各组件完整许可文本与本声明一同位于 third-party 目录。
