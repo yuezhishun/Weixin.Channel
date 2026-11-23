@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>微信联调台</title>
+  <link rel="stylesheet" href="/markdown.css">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/markdown.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="frame topbar-content">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+        <span>Weixin Web</span>
+      </div>
+      <span id="service-status" class="service-status" role="status">连接本机服务</span>
+    </div>
+  </header>
+
+  <main class="frame">
+    <div class="workspace">
+      <section class="panel accounts" aria-labelledby="accounts-heading">
+        <div class="panel-heading accounts-heading">
+          <h2 id="accounts-heading">微信账号 <span id="account-count" class="count">0</span></h2>
+          <button id="add-account" class="button secondary" type="button"><span aria-hidden="true">+</span> 添加账号</button>
+        </div>
+        <ul id="account-list" class="account-list" aria-label="已连接的微信账号"></ul>
+        <p id="no-accounts" class="no-accounts">正在读取账号…</p>
+      </section>
+
+      <section class="panel conversation" aria-labelledby="conversation-heading">
+        <div class="panel-heading conversation-heading">
+          <div class="conversation-title">
+            <span class="avatar conversation-avatar" aria-hidden="true"><i></i></span>
+            <div class="identity">
+              <h2 id="conversation-heading">消息会话</h2>
+              <p id="recipient" class="recipient"></p>
+            </div>
+          </div>
+          <div id="account-controls" class="account-controls" hidden>
+            <button id="edit-remark" class="button secondary" type="button">编辑备注</button>
+            <button id="refresh" class="button secondary" type="button">刷新</button>
+            <button id="toggle-account" class="button secondary" type="button">开始接收</button>
+          </div>
+        </div>
+        <div id="account-notice" class="account-notice" role="status" hidden></div>
+
+        <div id="history" class="history" role="region" aria-label="消息记录" tabindex="0">
+          <div id="welcome" class="empty">
+            <div class="empty-art" aria-hidden="true"><span></span><span></span></div>
+            <h3>连接微信，开始联调</h3>
+            <p>扫码后，向微信中的机器人发送一条测试消息。</p>
+            <button id="welcome-login" class="button primary" type="button">扫码连接微信</button>
+          </div>
+          <div id="history-empty" class="empty" hidden>
+            <div class="empty-art" aria-hidden="true"><span></span><span></span></div>
+            <h3 id="history-empty-heading">暂无消息</h3>
+            <p id="history-empty-detail"></p>
+          </div>
+          <div id="older-wrap" class="older" hidden><button id="older" class="button secondary" type="button">加载更早消息</button></div>
+          <ol id="message-list" class="message-list" hidden></ol>
+        </div>
+
+        <form id="composer" class="composer" hidden>
+          <div id="reply-draft" class="composer-reply" hidden>
+            <span id="reply-preview"></span>
+            <button id="remove-reply" class="button secondary" type="button">取消回复</button>
+          </div>
+          <div class="composer-editor">
+            <div id="format-tools" class="composer-format" role="group" aria-label="消息格式">
+              <button class="button format-button" type="button" data-format="undo" title="撤销" aria-label="撤销">↶</button>
+              <button class="button format-button" type="button" data-format="redo" title="重做" aria-label="重做">↷</button>
+              <button class="button format-button" type="button" data-format="heading" title="标题" aria-label="标题">H1</button>
+              <button class="button format-button" type="button" data-format="bold" title="粗体" aria-label="粗体"><strong>B</strong></button>
+              <button class="button format-button" type="button" data-format="italic" title="斜体" aria-label="斜体"><em>I</em></button>
+              <button class="button format-button" type="button" data-format="link">链接</button>
+              <button class="button format-button" type="button" data-format="code">代码块</button>
+              <button class="button format-button" type="button" data-format="rule" title="分隔线" aria-label="分隔线">—</button>
+            </div>
+            <div id="message-editor" class="editor-input"></div>
+          </div>
+          <div class="composer-actions">
+            <div class="composer-attachment">
+              <input id="message-file" type="file" hidden>
+              <button id="choose-file" class="button secondary" type="button">添加附件</button>
+              <span id="file-name" role="status"></span>
+              <button id="remove-file" class="button secondary" type="button" hidden>移除附件</button>
+            </div>
+            <span id="send-status" class="send-status" role="status"></span>
+            <button id="send" class="button primary" type="submit">发送消息 <span aria-hidden="true">↑</span></button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="link-dialog" aria-labelledby="link-heading">
+    <div class="dialog-heading"><h2 id="link-heading">插入链接</h2></div>
+    <form id="link-form" class="dialog-form">
+      <label for="link-url">链接地址</label>
+      <input id="link-url" type="url" placeholder="https://example.com" required autofocus>
+      <div class="dialog-actions">
+        <button id="link-cancel" class="button secondary" type="button">取消</button>
+        <button class="button primary" type="submit">确认</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remark-dialog" aria-labelledby="remark-heading">
+    <div class="dialog-heading"><h2 id="remark-heading">编辑微信备注</h2></div>
+    <form id="remark-form" class="dialog-form">
+      <label for="account-remark">备注名称</label>
+      <input id="account-remark" type="text" maxlength="40" autocomplete="off" aria-describedby="remark-hint" autofocus>
+      <p id="remark-hint" class="dialog-hint">仅在联调台显示，留空可清除备注。</p>
+      <p id="remark-error" class="login-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="remark-cancel" class="button secondary" type="button">取消</button>
+        <button id="remark-save" class="button primary" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="login-dialog" aria-labelledby="login-heading">
+    <div class="dialog-heading">
+      <h2 id="login-heading">扫码连接微信</h2>
+      <button id="close-login" class="button icon-button" type="button" aria-label="关闭扫码窗口" autofocus>×</button>
+    </div>
+    <div id="qr-slot" class="qr-slot">
+      <img id="qr-image" width="220" height="220" alt="微信登录二维码" hidden>
+      <span id="qr-placeholder" aria-hidden="true">等待二维码</span>
+    </div>
+    <p id="login-status" class="login-status" role="status">正在生成二维码…</p>
+    <form id="verification" class="verification" hidden>
+      <label for="verification-code">手机验证码</label>
+      <div><input id="verification-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{1,32}" maxlength="32" required>
+      <button id="submit-code" class="button primary" type="submit">提交</button></div>
+    </form>
+    <p id="login-error" class="login-error" role="alert" hidden></p>
+    <button id="retry-login" class="button secondary retry-login" type="button" hidden>重新生成二维码</button>
+    <p class="login-note">同一微信若换绑为新的 Bot ID，旧账号的消息记录和配置会清除。</p>
+  </dialog>
+</body>
+</html>

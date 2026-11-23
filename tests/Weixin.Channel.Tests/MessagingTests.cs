@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -29,6 +30,35 @@ public sealed class MessagingTests
     [InlineData("*未闭合 ![image](url)\n##### 标题", "*未闭合 ![image](url)\n标题")]
     [InlineData("![one](u)![two](v)", "")]
     public void Official_markdown_keeps_supported_formatting_and_removes_only_unsupported_markers(string input, string expected) => Assert.Equal(expected, Media.FilterMarkdown(input));
+
+    [Theory]
+    [InlineData("打开[下载_中文_素材](https://example.com/a_中文_b?source=网页#章节_一_节) *中文*",
+        "打开[下载_中文_素材](https://example.com/a_中文_b?source=网页#章节_一_节) 中文")]
+    [InlineData(@"[说明\[中文\]\_下载](https://example.com/a(b)?q=_(中)_#锚) ![图](url)",
+        @"[说明\[中文\]\_下载](https://example.com/a(b)?q=_(中)_#锚) ")]
+    [InlineData(@"[资料 [中文]](<https://example.com/a)_中文_槽> ""标题) _(中文)_"") *中文*",
+        @"[资料 [中文]](<https://example.com/a)_中文_槽> ""标题) _(中文)_"") 中文")]
+    [InlineData(@"[说明](https://example.com/a\(b\)?x=1#frag) \_中文\_ *中文*",
+        @"[说明](https://example.com/a\(b\)?x=1#frag) \_中文\_ 中文")]
+    [InlineData("*说明 [下载](https://example.com/a*中*b) 后续*", "说明 [下载](https://example.com/a*中*b) 后续")]
+    [InlineData(@"_查看 [资料](https://example.com/a\_中_b) 后续_", @"查看 [资料](https://example.com/a\_中_b) 后续")]
+    [InlineData("***查看 [资料](https://example.com/a***中) 后续***", "查看 [资料](https://example.com/a***中) 后续")]
+    [InlineData("[查看 ![封面](https://example.com/cover_(1).png)](https://example.com/)", "[查看 ](https://example.com/)")]
+    [InlineData("*查看 [封面 ![图](cover)](https://example.com/a*b)*", "查看 [封面 ](https://example.com/a*b)")]
+    public void Markdown_filter_preserves_link_labels_escapes_and_destinations(string input, string expected) =>
+        Assert.Equal(expected, Media.FilterMarkdown(input));
+
+    [Fact]
+    public void Markdown_filter_keeps_long_drafts_with_unclosed_link_syntax_responsive()
+    {
+        var draft = new string('[', 150_000) + "\n" + string.Concat(Enumerable.Repeat("[资料](", 30_000));
+        var timer = Stopwatch.StartNew();
+        var result = Media.FilterMarkdown(draft);
+        var elapsed = timer.Elapsed;
+
+        Assert.Equal(draft, result);
+        Assert.True(elapsed < TimeSpan.FromSeconds(2), $"发送草稿过滤用时 {elapsed}。");
+    }
 
     [Fact]
     public void Chunking_preserves_emoji_and_the_entire_business_message()
@@ -316,6 +346,7 @@ public sealed class MessagingTests
     public async Task Caption_chunks_precede_media_and_each_send_keeps_its_independent_receipt()
     {
         using var harness = new Harness();
+        harness.AddMessage("1", []);
         var file = Path.Combine(harness.Directory, "report.pdf");
         File.WriteAllBytes(file, [1, 2, 3, 4]);
         var wire = new List<JsonObject>();
@@ -337,10 +368,12 @@ public sealed class MessagingTests
             return Json($$"""{"message_id":"{{wire.Count}}","ret":0}""");
         };
         await using var channel = harness.Open(o => o with { TextChunkSize = 4 });
-        var result = await channel.SendAsync(new SendRequest { PeerId = "owner", Text = "**hi**😀", Media = new Uri(file).AbsoluteUri });
+        var message = Assert.IsType<InboundMessage>(await channel.ClaimAsync());
+        var result = await channel.SendAsync(new SendRequest { DeliveryId = message.DeliveryId, Text = "**hi**😀", Media = new Uri(file).AbsoluteUri });
         Assert.Equal("success", result.Status);
         Assert.Equal(3, result.Segments.Count);
         Assert.Equal(3, result.Segments.Select(p => p.ClientId).Distinct().Count());
+        Assert.All(wire, msg => Assert.Matches(@"\Aweixin-[0-9a-f]{32}\z", Media.Text(msg["client_id"])!));
         Assert.Equal(new[] { 1, 1, 4 }, wire.Select(msg => Media.Number(msg["item_list"]![0]!["type"])));
         Assert.Equal("**hi**😀", string.Concat(wire.Take(2).Select(msg => Media.Text(msg["item_list"]![0]!["text_item"]!["text"]))));
         Assert.Equal("report.pdf", Media.Text(wire[2]["item_list"]![0]!["file_item"]!["file_name"]));
@@ -395,16 +428,20 @@ public sealed class MessagingTests
     }
 
     [Fact]
-    public async Task Reply_uses_original_delivery_context_even_after_a_new_message_arrives()
+    public async Task Reply_matches_official_client_id_and_uses_original_delivery_context()
     {
         using var harness = new Harness();
         harness.AddMessage("1", new JsonArray(), "old-context");
         harness.AddMessage("2", new JsonArray(), "new-context");
         await using var channel = harness.Open();
         var message = (await channel.ClaimAsync())!;
-        await message.ReplyAsync("回复第一条");
-        Assert.Contains("old-context", Assert.Single(harness.Handler.Calls).Body);
-        Assert.DoesNotContain("new-context", harness.Handler.Calls[0].Body);
+        var result = await channel.SendAsync(new SendRequest { DeliveryId = message.DeliveryId, Text = "回复第一条" });
+        var wire = JsonNode.Parse(Assert.Single(harness.Handler.Calls).Body)!["msg"]!;
+        Assert.Equal("old-context", Media.Text(wire["context_token"]));
+        Assert.Null(wire["run_id"]);
+        var clientId = Assert.Single(result.Segments).ClientId;
+        Assert.Equal(clientId, Media.Text(wire["client_id"]));
+        Assert.Matches($$"""\Aopenclaw-weixin:{{harness.Time.GetUtcNow().ToUnixTimeMilliseconds()}}-[0-9a-f]{8}\z""", clientId);
     }
 
     [Fact]
@@ -657,6 +694,7 @@ public sealed class MessagingTests
         {
             Assert.Equal(message.RunId, Media.Text(msg["run_id"]));
             Assert.Equal("original-context", Media.Text(msg["context_token"]));
+            Assert.Matches(@"\Aweixin-[0-9a-f]{32}\z", Media.Text(msg["client_id"])!);
         });
         Assert.Equal("call", Media.Text(messages[0]["item_list"]![0]!["tool_call_start_item"]!["tool_call_id"]));
         Assert.Equal("call", Media.Text(messages[1]["item_list"]![0]!["tool_call_result_item"]!["tool_call_id"]));

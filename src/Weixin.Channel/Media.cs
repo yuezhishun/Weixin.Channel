@@ -37,8 +37,11 @@ internal static class Media
 
     internal static bool Downloadable(JsonNode? item)
     {
-        var reference = Reference(item)?["media"];
-        return !string.IsNullOrEmpty(Text(reference?["full_url"])) || !string.IsNullOrEmpty(Text(reference?["encrypt_query_param"]));
+        return item is JsonObject && Reference(item)?["media"] is JsonObject media &&
+            (HasAddress(media["full_url"]) || HasAddress(media["encrypt_query_param"]));
+
+        static bool HasAddress(JsonNode? node) =>
+            node is JsonValue value && value.TryGetValue<string>(out var address) && !string.IsNullOrWhiteSpace(address);
     }
 
     internal static JsonNode? FirstMedia(JsonArray items)
@@ -117,7 +120,7 @@ internal static class Media
         ".xls" => "application/vnd.ms-excel", ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".ppt" => "application/vnd.ms-powerpoint", ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         ".txt" => "text/plain", ".csv" => "text/csv", ".zip" => "application/zip", ".tar" => "application/x-tar", ".gz" => "application/gzip",
-        ".mp3" => "audio/mpeg", ".ogg" => "audio/ogg", ".wav" => "audio/wav", ".silk" => "audio/silk",
+        ".mp3" => "audio/mpeg", ".ogg" => "audio/ogg", ".wav" => "audio/wav", ".silk" => "audio/silk", ".amr" => "audio/amr",
         ".mp4" => "video/mp4", ".mov" => "video/quicktime", ".webm" => "video/webm", ".mkv" => "video/x-matroska", ".avi" => "video/x-msvideo",
         ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", ".bmp" => "image/bmp",
         _ => "application/octet-stream"
@@ -127,7 +130,8 @@ internal static class Media
     {
         "image/jpeg" or "image/jpg" => ".jpg", "image/png" => ".png", "image/gif" => ".gif", "image/webp" => ".webp", "image/bmp" => ".bmp",
         "video/mp4" => ".mp4", "video/quicktime" => ".mov", "video/webm" => ".webm", "video/x-matroska" => ".mkv", "video/x-msvideo" => ".avi",
-        "audio/mpeg" => ".mp3", "audio/ogg" => ".ogg", "audio/wav" => ".wav", "audio/silk" => ".silk", "application/pdf" => ".pdf", "application/zip" => ".zip",
+        "audio/mpeg" => ".mp3", "audio/ogg" => ".ogg", "audio/wav" => ".wav", "audio/silk" => ".silk", "audio/amr" => ".amr",
+        "application/pdf" => ".pdf", "application/zip" => ".zip",
         "application/x-tar" => ".tar", "application/gzip" => ".gz", "text/plain" => ".txt", "text/csv" => ".csv", _ => ".bin"
     };
 
@@ -148,7 +152,8 @@ internal static class Media
     }
 
     internal static async Task<WeixinAttachment?> DownloadAsync(HttpClient http, Uri cdnBase, string directory,
-        JsonNode item, bool referenced, Action<string> log, CancellationToken ct, TimeSpan? timeout = null, TimeProvider? time = null)
+        JsonNode item, bool referenced, Action<string> log, CancellationToken ct, TimeSpan? timeout = null, TimeProvider? time = null,
+        bool conversationPreview = false)
     {
         using var deadline = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(60), time ?? TimeProvider.System);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
@@ -169,7 +174,11 @@ internal static class Media
         var kind = type switch { 2 => "image", 3 => "voice", 4 => "file", 5 => "video", _ => "file" };
         var name = type == 4 ? Text(reference?["file_name"]) : null;
         var mime = type switch { 2 => DetectImage(bytes), 3 => "audio/silk", 5 => "video/mp4", _ => Mime(name ?? "file.bin") };
-        if (type == 3)
+        if (conversationPreview && type == 3) mime = DetectVoice(bytes);
+        if (conversationPreview && type == 5)
+            mime = bytes.AsSpan().StartsWith(new byte[] { 0x1A, 0x45, 0xDF, 0xA3 }) ? "video/webm" :
+                bytes.Length >= 8 && bytes.AsSpan(4, 4).SequenceEqual("ftyp"u8) ? "video/mp4" : "application/octet-stream";
+        if (type == 3 && mime == "audio/silk")
         {
             try { bytes = SilkToWav(bytes, ct); mime = "audio/wav"; }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -179,6 +188,16 @@ internal static class Media
         var path = Path.Combine(directory, Guid.NewGuid().ToString("N") + Extension(mime));
         await File.WriteAllBytesAsync(path, bytes, ct);
         return new WeixinAttachment(kind, path, mime, name, referenced);
+    }
+
+    private static string DetectVoice(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length > 0 && (bytes[0] == 2 ? bytes[1..] : bytes).StartsWith("#!SILK_V3"u8)) return "audio/silk";
+        if (bytes.Length >= 12 && bytes.StartsWith("RIFF"u8) && bytes[8..].StartsWith("WAVE"u8)) return "audio/wav";
+        if (bytes.StartsWith("OggS"u8)) return "audio/ogg";
+        if (bytes.StartsWith("ID3"u8) || (bytes.Length >= 2 && bytes[0] == 0xff && (bytes[1] & 0xe0) == 0xe0)) return "audio/mpeg";
+        if (bytes.StartsWith("#!AMR"u8)) return "audio/amr";
+        return "application/octet-stream";
     }
 
     internal static string DetectImage(byte[] bytes)
@@ -260,10 +279,12 @@ internal static class Media
         return chunks;
     }
 
-    // 与官方 one-shot 状态机一致；本库不提供逐 token 流式输出。
+    // 主要沿用官方 one-shot 状态机，保留链接与转义，避免格式过滤改变文案或地址。
     internal static string FilterMarkdown(string input)
     {
         var output = new StringBuilder();
+        var closing = MatchMarkdownDelimiters(input);
+        var linkEnds = new int[closing.Length];
         var position = 0;
         var sol = true;
         var fence = false;
@@ -314,19 +335,21 @@ internal static class Media
                 if (position == input.Length) break;
                 remaining = input.AsSpan(position);
             }
-            if (remaining.StartsWith("!["))
+            if (remaining.StartsWith("![") && LinkEnd(position + 1) is > 0 and var imageEnd)
             {
-                var close = input.IndexOf(']', position + 2);
-                if (close < 0) { output.Append(remaining); break; }
-                if (close + 1 < input.Length && input[close + 1] == '(')
-                {
-                    var parenthesis = input.IndexOf(')', close + 2);
-                    if (parenthesis < 0) { output.Append(remaining); break; }
-                    position = parenthesis + 1;
-                    continue;
-                }
-                output.Append(input, position, close + 1 - position);
-                position = close + 1;
+                position = imageEnd;
+                continue;
+            }
+            if (IsMarkdownEscape(input, position))
+            {
+                output.Append(remaining[..2]);
+                position += 2;
+                continue;
+            }
+            if (remaining[0] == '[' && LinkEnd(position) is > 0 and var linkEnd)
+            {
+                AppendLinks(position, linkEnd);
+                position = linkEnd;
                 continue;
             }
             if (input[position] is '*' or '_')
@@ -339,23 +362,27 @@ internal static class Media
                     var start = position + length;
                     var end = -1;
                     var marker = new string(ch, length);
-                    if (length == 3) end = input.IndexOf(marker, start, StringComparison.Ordinal);
-                    else
+                    for (var j = start; j < input.Length; j++)
                     {
-                        for (var j = start; j < input.Length; j++)
+                        if (length == 1 && input[j] == '\n') break;
+                        if (IsMarkdownEscape(input, j)) { j++; continue; }
+                        if (input[j] == '[' && LinkEnd(j) is > 0 and var nestedEnd)
                         {
-                            if (input[j] == '\n') break;
-                            if (input[j] != ch) continue;
-                            if (j + 1 < input.Length && input[j + 1] == ch) { j++; continue; }
-                            end = j; break;
+                            j = nestedEnd - 1;
+                            continue;
                         }
+                        if (input[j] != ch) continue;
+                        if (length == 1 && j + 1 < input.Length && input[j + 1] == ch) { j++; continue; }
+                        if (length == 3 && !input.AsSpan(j).StartsWith(marker)) continue;
+                        end = j;
+                        break;
                     }
                     if (end >= 0)
                     {
                         var content = input.Substring(start, end - start);
                         var cjk = content.Any(c => c is >= '\u2e80' and <= '\u9fff' or >= '\uac00' and <= '\ud7af' or >= '\uf900' and <= '\ufaff');
                         if (!cjk) output.Append(marker);
-                        output.Append(content);
+                        AppendLinks(start, end);
                         if (!cjk) output.Append(marker);
                         position = end + length;
                         continue;
@@ -374,6 +401,115 @@ internal static class Media
             if (current == '\n') sol = true;
         }
         return output.ToString();
+
+        int LinkEnd(int start)
+        {
+            var labelEnd = closing[start];
+            if (labelEnd == 0 || labelEnd + 1 == input.Length || input[labelEnd + 1] != '(') return 0;
+            if (linkEnds[labelEnd] == 0) linkEnds[labelEnd] = MarkdownLinkEnd(input, labelEnd + 2, closing);
+            return linkEnds[labelEnd];
+        }
+
+        void AppendLinks(int start, int end)
+        {
+            if (linkEnds.Length == 0)
+            {
+                output.Append(input, start, end - start);
+                return;
+            }
+            var labelEnd = -1;
+            var from = start;
+            for (var index = start; index < end; index++)
+            {
+                if (IsMarkdownEscape(input, index)) { index++; continue; }
+                if (input[index] == '!' && index + 1 < labelEnd && input[index + 1] == '[' &&
+                    LinkEnd(index + 1) is > 0 and var imageEnd && imageEnd <= labelEnd)
+                {
+                    output.Append(input, from, index - from);
+                    from = imageEnd;
+                    index = imageEnd - 1;
+                    continue;
+                }
+                if (input[index] == '[' && LinkEnd(index) is > 0 and var linkEnd && linkEnd <= end && index > labelEnd)
+                    labelEnd = closing[index];
+                if (input[index] == ']' && linkEnds[index] is > 0 and var destinationEnd && destinationEnd <= end)
+                    index = destinationEnd - 1;
+            }
+            output.Append(input, from, end - from);
+        }
+    }
+
+    private static bool IsMarkdownEscape(string input, int index) =>
+        input[index] == '\\' && index + 1 < input.Length &&
+        input[index + 1] is >= '!' and <= '/' or >= ':' and <= '@' or >= '[' and <= '\u0060' or >= '{' and <= '~';
+
+    private static int[] MatchMarkdownDelimiters(string input)
+    {
+        // A plain draft needs no index. An unmatched opener in rich text is handled in constant time.
+        if (!input.Contains('[')) return [];
+        var closing = new int[input.Length];
+        var labels = new Stack<int>();
+        var parentheses = new Stack<int>();
+        for (var index = 0; index < input.Length; index++)
+        {
+            if (IsMarkdownEscape(input, index)) { index++; continue; }
+            switch (input[index])
+            {
+                case '\n' or '\r': labels.Clear(); break;
+                case '[': labels.Push(index); break;
+                case ']' when labels.TryPop(out var label): closing[label] = index; break;
+                case '(': parentheses.Push(index); break;
+                case ')' when parentheses.TryPop(out var group): closing[group] = index; break;
+            }
+            if (char.IsWhiteSpace(input[index])) parentheses.Clear();
+        }
+        return closing;
+    }
+
+    private static int MarkdownLinkEnd(string input, int index, int[] closing)
+    {
+        index = SkipWhitespace(index);
+        if (index < input.Length && input[index] == '<')
+        {
+            index = LiteralEnd(index + 1, '>', '<');
+            if (index < 0) return -1;
+        }
+        else
+        {
+            while (index < input.Length && input[index] != ')' && !char.IsWhiteSpace(input[index]))
+            {
+                if (IsMarkdownEscape(input, index)) index += 2;
+                else if (input[index] != '(') index++;
+                else if (closing[index] > 0) index = closing[index] + 1;
+                else return -1;
+            }
+        }
+        var suffix = SkipWhitespace(index);
+        if (suffix > index && suffix < input.Length && input[suffix] is '"' or '\'' or '(')
+        {
+            var quote = input[suffix];
+            var titleEnd = LiteralEnd(suffix + 1, quote == '(' ? ')' : quote, quote == '(' ? '(' : '\0');
+            if (titleEnd < 0) return -1;
+            suffix = SkipWhitespace(titleEnd);
+        }
+        return suffix < input.Length && input[suffix] == ')' ? suffix + 1 : -1;
+
+        int SkipWhitespace(int start)
+        {
+            while (start < input.Length && char.IsWhiteSpace(input[start]) && input[start] is not ('\n' or '\r')) start++;
+            return start;
+        }
+
+        int LiteralEnd(int start, char end, char forbidden)
+        {
+            for (var i = start; i < input.Length && input[i] is not ('\n' or '\r'); i++)
+            {
+                if (IsMarkdownEscape(input, i)) { i++; continue; }
+                if (input[i] == end) return i + 1;
+                if (input[i] == forbidden) break;
+            }
+            return -1;
+        }
     }
 
     internal static string? PartialQuote(string body, JsonObject partial)

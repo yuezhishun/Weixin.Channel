@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);editor/**</DefaultItemExcludes>
+  </PropertyGroup>
   <ItemGroup>
+    <Content Update="wwwroot/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="../../src/Weixin.Channel/Weixin.Channel.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="11.0.0" />
     <PackageReference Include="QRCoder" Version="1.8.1" />

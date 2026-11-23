@@ -19,7 +19,7 @@
 WEIXIN_DOTNET=/path/to/dotnet bash scripts/build.sh
 ```
 
-脚本按锁定还原、Release 构建、测试、自包含发布、发布程序验收、NuGet 打包和独立消费者验证的顺序执行。NuGet 包位于 `artifacts/packages/<RID>/Weixin.Channel.1.0.0-rc.3.nupkg`，平台归档为 `artifacts/Weixin.Channel-<RID>-<时间戳>.zip` 或 `.tar.gz`。日志、TRX 和归档 SHA-256 位于 `artifacts/verification/`。独立消费者通过 `PackageReference` 和隔离包缓存验证 SQLite 状态创建与重开。
+脚本按锁定还原、Release 构建、测试、自包含发布、发布程序验收、NuGet 打包和独立消费者验证的顺序执行。NuGet 包位于 `artifacts/packages/<RID>/Weixin.Channel.1.0.0.nupkg`，平台归档为 `artifacts/Weixin.Channel-<RID>-<时间戳>.zip` 或 `.tar.gz`。日志、TRX 和归档 SHA-256 位于 `artifacts/verification/`。独立消费者通过 `PackageReference` 和隔离包缓存验证 SQLite 状态创建与重开。
 
 ## 运行自包含发布包
 
@@ -100,17 +100,30 @@ await channel.RunAsync(accountId, async (message, cancellationToken) =>
 
 仅入站保证至少一次：业务成功而 Ack 前崩溃，消息会再次交付同一 `DeliveryId`。不承诺端到端 exactly-once。unknown 发送会保存待核查状态，不应自动重发。caption 成功而媒体失败返回部分结果，调用方必须检查 `SendResult.Status` 与每个分段。
 
-## Web API
+## Web 验证页与 API
 
 ```powershell
-dotnet run --project samples/Weixin.Web -- --state .state
-curl.exe -H "x-weixin-request: 1" http://127.0.0.1:3083/health
-curl.exe -X POST -H "x-weixin-request: 1" http://127.0.0.1:3083/api/logins
+dotnet run --project samples/Weixin.Web -- --state .state/web-test
 ```
 
-默认绑定 `127.0.0.1:3083`，所有请求（含 health、OpenAPI、QR、SSE）均要求 `x-weixin-request: 1`、loopback 来源、正确 Host 和同源或缺省 Origin，不开放 CORS。不能直接在普通浏览器地址栏打开受保护的 QR 路由，请使用带 header 的 `fetch` 或 curl 保存图片。OpenAPI 位于 `/openapi/v1.json`。
+浏览器打开 [本机验证页](http://127.0.0.1:3083/)，用独立状态目录和自己的测试微信完成一轮收发。
 
-Web 只启用手动 inbox 消费。先启动账号，再 claim；成功执行业务才 ack，20 秒左右主动 renew，失败 retry。SSE 只通知，首次连接给出 pending 摘要；断线后仍从 inbox 领取可靠消息，不能以 SSE 事件作为已经处理的凭据。完整路径、请求体、调用例子见 [接口说明](docs/api.md)。
+扫码绑定返回微信用户 ID 和 Bot ID。选择一个账号，在会话顶部点「编辑备注」即可给它起个易识别的名字。备注优先显示在账号列表和会话顶部，并保存在当前状态目录。清空备注后恢复显示接口标识。
+
+1. 点「添加账号」，用手机扫码并确认。手机要求验证码时，在扫码窗口输入。
+2. 在会话中点「开始接收」，用扫码微信向机器人发一条测试消息。扫码完成后网页会等待首条带会话上下文的单聊，收到后才开放发送。
+3. 网页使用 Milkdown 编辑标题、粗体、斜体、链接、代码块和分隔线，也可粘贴 Markdown。可以添加一个附件，正文会先于附件发送。需要按原会话上下文回复时，点入站消息的「回复此消息」。若结果为 `partial` 或 `unknown`，先用手机核对再决定是否补发。
+4. 刷新页面或用同一状态目录重启 Web，确认消息仍可查看。重启后再次点「开始接收」才会继续轮询。验证多个微信账号时，分别绑定并切换会话，核对历史与发送目标。
+
+页面按账号显示与扫码人的收发历史，包含引用及按正文顺序排列的媒体。点开可预览图片、播放语音或视频，以及下载附件。微信 SILK 语音可转成 WAV，遇到浏览器不支持的格式可下载。通过本页面下载的媒体长期留在同一状态目录，磁盘占用会随下载增长。删除账号或实际换绑会清除对应历史及媒体。读取历史和媒体不会领取 Inbox 或确认消息。
+
+历史与引用的文字使用 Markdown 排版。编辑器及渲染器的静态资源随 Web 分发，修改编辑器源码后，在 `samples/Weixin.Web/editor` 运行 `npm ci` 和 `npm run build` 更新资源。
+
+API（含 health、OpenAPI、QR、SSE）要求 `x-weixin-request: 1`。主页和静态资源可直接通过浏览器打开。所有请求都受本机来源、Host 及 Origin 检查。OpenAPI 位于 `/openapi/v1.json`。
+
+外部程序仍可手动消费 Inbox。先启动账号再 claim，处理时间较长时主动 renew，成功后 ack，可恢复失败时 retry。SSE 提供通知，首次连接会返回 pending 摘要。完整路径、请求体和调用例子见 [接口说明](docs/api.md)。
+
+无需微信扫码的验证可先运行 `dotnet build Weixin.Channel.slnx -c Release`，再运行 `./scripts/verify-web.ps1`（Linux 用 `bash scripts/verify-web.sh`）。运行脚本前停止手动启动的 Web 实例，脚本会使用新的测试状态目录。完整构建脚本也会执行这组 Web 检查。
 
 支持范围、官方源码映射见 [功能映射](docs/feature-map.md)。第三方源码与依赖许可见 [第三方说明](third-party/NOTICE.md)。群聊、撤回、原生语音出站和逐 token 流式输出不在范围内；音频附件以文件出站。
 

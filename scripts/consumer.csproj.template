@@ -7,5 +7,5 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
-  <ItemGroup><PackageReference Include="Weixin.Channel" Version="[1.0.0-rc.3]" /></ItemGroup>
+  <ItemGroup><PackageReference Include="Weixin.Channel" Version="[1.0.0]" /></ItemGroup>
 </Project>

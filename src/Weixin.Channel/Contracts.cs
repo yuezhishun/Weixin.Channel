@@ -30,9 +30,16 @@ public sealed record WeixinOptions
 
 public sealed record WeixinAccount(string AccountId, string OwnerId, string BaseUrl, bool Enabled,
     bool Debug, IReadOnlyList<string> Allowlist, DateTimeOffset? PausedUntil, bool Running = false,
-    DateTimeOffset? LastActivityAt = null, DateTimeOffset? LastInboundAt = null, string? LastError = null);
+    DateTimeOffset? LastActivityAt = null, DateTimeOffset? LastInboundAt = null, string? LastError = null)
+{
+    public string? Remark { get; init; }
+}
 
-public sealed record AccountConfiguration(bool? Enabled = null, IReadOnlyList<string>? Allowlist = null, bool? Debug = null);
+public sealed record AccountConfiguration(bool? Enabled = null, IReadOnlyList<string>? Allowlist = null, bool? Debug = null)
+{
+    public string? Remark { get; init; }
+    public string? ExpectedOwnerId { get; init; }
+}
 
 public sealed record LoginUpdate(string Status, string? QrContent = null, int RefreshCount = 1);
 
@@ -70,6 +77,27 @@ public sealed record InboundMessage
 
 public sealed record InboxEntry(string DeliveryId, string AccountId, string PeerId, string MessageId,
     string State, int Attempts, DateTimeOffset AvailableAt, DateTimeOffset? LeaseUntil, string? LastError);
+
+public sealed record ConversationAttachment(string Kind, string? Name)
+{
+    public string? Id { get; init; }
+}
+
+public sealed record ConversationPart(string Text, ConversationAttachment? Attachment);
+public sealed record ConversationQuote(string Text, bool Missing, ConversationAttachment? Attachment);
+
+public sealed record ConversationMessage(string Id, string Direction, DateTimeOffset At, string Text,
+    IReadOnlyList<ConversationAttachment> Attachments, string Status)
+{
+    public IReadOnlyList<ConversationPart> Parts { get; init; } = [];
+    public ConversationQuote? Quote { get; init; }
+    public bool CanReply { get; init; }
+    public bool AwaitingDeliveryConfirmation { get; init; }
+}
+public sealed record OwnerConversation(string OwnerId, IReadOnlyList<ConversationMessage> Items, string? NextBefore)
+{
+    public bool HasSendContext { get; init; }
+}
 
 public sealed record SendRequest
 {

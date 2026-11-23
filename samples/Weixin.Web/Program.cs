@@ -1,11 +1,17 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi;
 using QRCoder;
 using Weixin.Channel;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot")
+});
 builder.WebHost.UseUrls("http://127.0.0.1:3083");
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi(options => options.OpenApiVersion = OpenApiSpecVersion.OpenApi3_1);
@@ -18,6 +24,8 @@ await using var channel = new WeixinChannel(new WeixinOptions
     BotAgent = "Weixin.Web/1.0.0",
     Log = message => app.Logger.LogInformation("{ChannelMessage}", message)
 });
+var mediaUploads = Path.Combine(Path.GetFullPath(stateDirectory), "media", "web-upload");
+OwnerMedia.CleanUploads(mediaUploads, app.Logger);
 
 app.UseStatusCodePages(async context =>
     await Results.Problem(statusCode: context.HttpContext.Response.StatusCode, title: "请求未成功，请检查路径、方法与请求参数").ExecuteAsync(context.HttpContext));
@@ -36,6 +44,8 @@ app.Use(async (context, next) =>
     var remote = context.Connection.RemoteIpAddress;
     var host = context.Request.Host;
     var origin = context.Request.Headers.Origin.ToString();
+    var pageRequest = (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method)) &&
+        context.Request.Path.Value is "/" or "/app.css" or "/app.js" or "/markdown.js" or "/markdown.css";
     var validOrigin = string.IsNullOrEmpty(origin) ||
         (Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
          uri.Scheme == context.Request.Scheme &&
@@ -43,11 +53,13 @@ app.Use(async (context, next) =>
          uri.Port == (host.Port ?? (context.Request.IsHttps ? 443 : 80)) && uri.AbsolutePath == "/" && string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment));
     if (remote is null || !IsLoopback(remote) || !IsLoopbackHost(host.Host) ||
         (host.Port ?? (context.Request.IsHttps ? 443 : 80)) != context.Connection.LocalPort ||
-        !validOrigin || context.Request.Headers["x-weixin-request"].ToString() != "1")
+        !validOrigin || (!pageRequest && context.Request.Headers["x-weixin-request"].ToString() != "1"))
     {
         await Results.Problem(statusCode: 403, title: "请求被拒绝", detail: "仅允许本机客户端、正确 Host/Origin 与 x-weixin-request: 1；不开放跨域。").ExecuteAsync(context);
         return;
     }
+    if (pageRequest)
+        context.Response.Headers.ContentSecurityPolicy = "default-src 'self'; img-src 'self' blob:; media-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
     try { await next(context); }
     catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
     catch (Exception error)
@@ -56,6 +68,7 @@ app.Use(async (context, next) =>
         var (status, title) = error switch
         {
             KeyNotFoundException => (404, "资源不存在"),
+            BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } => (413, "上传大小超出限制"),
             ArgumentException or FormatException or JsonException or BadHttpRequestException => (400, "请求参数无效"),
             InvalidOperationException => (409, "当前状态不允许此操作；请核对账号、租约和 unknown 发送记录"),
             OperationCanceledException => (408, "操作超时或已取消"),
@@ -66,6 +79,8 @@ app.Use(async (context, next) =>
     }
 });
 
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", accounts = channel.GetAccounts().Count }));
 app.MapOpenApi();
 var api = app.MapGroup("/api")
@@ -140,6 +155,19 @@ api.MapDelete("/accounts/{id}", async (string id, CancellationToken ct) =>
     await channel.DeleteAccountAsync(id, ct);
     return Results.NoContent();
 });
+api.MapGet("/accounts/{id}/messages", (string id, string? before) => TypedResults.Ok(channel.GetOwnerConversation(id, before)));
+api.MapPost("/accounts/{id}/messages", async (string id, OwnerMessageRequest body, CancellationToken ct) =>
+    TypedResults.Ok(await channel.SendOwnerMessageAsync(id, body.OwnerId, body.Text, null, body.ReplyDeliveryId, ct)));
+api.MapGet("/accounts/{id}/messages/{direction}/{messageId}/attachments/{attachmentId}",
+    async (string id, string direction, string messageId, string attachmentId, CancellationToken ct) =>
+        OwnerMedia.Download(await channel.GetOwnerAttachmentAsync(id, direction, messageId, attachmentId, ct)))
+    .Produces<FileStreamHttpResult>(contentType: OwnerMedia.DownloadMediaType, additionalContentTypes: OwnerMedia.InlineMediaTypes);
+api.MapPost("/accounts/{id}/messages/media", (string id, HttpRequest request, CancellationToken ct) =>
+    OwnerMedia.SendAsync(channel, id, request, mediaUploads, app.Logger, ct))
+    .WithMetadata(new RequestSizeLimitAttribute(OwnerMedia.RequestLimit))
+    .Accepts<OwnerMediaRequest>("multipart/form-data")
+    .ProducesProblem(StatusCodes.Status413PayloadTooLarge)
+    .ProducesProblem(StatusCodes.Status415UnsupportedMediaType);
 
 api.MapPost("/messages", async (SendRequest body, CancellationToken ct) => TypedResults.Ok(await channel.SendAsync(body, ct)));
 api.MapPost("/messages/reply", async (SendRequest body, CancellationToken ct) =>
@@ -283,6 +311,7 @@ static bool IsLoopbackHost(string host) => string.Equals(host, "localhost", Stri
     (IPAddress.TryParse(host.Trim('[', ']'), out var ip) && IsLoopback(ip));
 
 internal sealed record VerificationCode(string Code);
+internal sealed record OwnerMessageRequest(string OwnerId, string Text, string? ReplyDeliveryId = null);
 internal sealed record TypingRequest(string PeerId, bool Active = true, string? AccountId = null, string? DeliveryId = null);
 internal sealed record LeaseRequest(string? LeaseId = null, bool AllowUnknownSend = false);
 internal sealed record TimingRequest(string DeliveryId, string Operation, double ElapsedMilliseconds);

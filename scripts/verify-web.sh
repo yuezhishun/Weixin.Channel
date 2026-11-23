@@ -37,6 +37,21 @@ check() {
     if [[ "$expected" -ge 400 ]] && ! grep -qi 'content-type: application/problem+json' "$evidence/headers.txt"; then echo '错误未返回ProblemDetails' >&2; exit 1; fi
     echo "$path -> $actual" | tee -a "$evidence/checks.log"
 }
+check / 200
+grep -qi '^content-type: text/html' "$evidence/headers.txt"
+check /app.js 200
+grep -Eqi '^content-type: (text|application)/javascript' "$evidence/headers.txt"
+check /app.css 200
+grep -qi '^content-type: text/css' "$evidence/headers.txt"
+check /markdown.js 200
+grep -Eqi '^content-type: (text|application)/javascript' "$evidence/headers.txt"
+check /markdown.css 200
+grep -qi '^content-type: text/css' "$evidence/headers.txt"
+check / 403 -H 'Host: evil.example:3083'
+check /app.js 403 -H 'Origin: https://evil.example'
+check /api/logins/missing/qr 403
+check /api/accounts/missing/messages 403
+check /api/accounts/missing/messages 403 -H 'Content-Type: application/json' -X POST -d '{"ownerId":"test","text":"test"}'
 check /health 200 -H 'x-weixin-request: 1'
 check /health 403
 check /health 403 -H 'x-weixin-request: 1' -H 'Host: evil.example:3083'
@@ -63,5 +78,5 @@ wait "$server_pid" || true
 grep -q 'receipt-1' "$evidence/cli-receipts.json"
 grep -q 'receipt-3' "$evidence/cli-receipts.json"
 if grep -q 'FIXTURE_SECRET_MUST_NOT_APPEAR' "$evidence/cli-receipts.json"; then echo 'CLI公开了协议请求或凭据。' >&2; exit 1; fi
-echo 'HTTP边界、ProblemDetails、OpenAPI响应schema、非空SSE无副作用、租约、持久收据与跨进程目录互斥全部通过；未请求真实微信服务。' > "$evidence/result.txt"
+echo '首页、HTTP 边界、OpenAPI、账号聊天接口、SSE、租约、持久收据与跨进程目录互斥全部通过，未请求真实微信服务。' > "$evidence/result.txt"
 echo "Web验证通过：$evidence"

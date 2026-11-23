@@ -19,9 +19,11 @@
 | C-A07 引用与缓存 | 测入站／出站引用、仅 ID、内联和局部。变更 MD5、时间、数量和容量，尝试跨对端恢复，最后损坏引用库。 | 内容及附件按预期恢复，局部只在 MD5 匹配时生效，缺失显示占位。淘汰限额和隔离生效，损坏缓存不影响普通收发。 | `MessagingTests`，缓存命中、淘汰及媒体哈希。 |
 | C-A08 回复、分块与收据 | 连收两条后回复第一条，发送跨 4000 UTF-16 单元的 emoji 文本、Markdown、caption 和三种来源媒体。注入传输失败、响应丢失及前后 hook 故障，重启查收据。 | 原 context 被使用。分块无断裂，caption 在前。`success`、`failed`、`partial`、`unknown` 可区分，重启可查，取消不发送，通知失败不重复业务，unknown 不自动重发。 | `MessagingTests`、`CoreTests`，每段 client ID 和状态。 |
 | C-A09 typing、工具进度与命令 | 捕获 ticket 获取／刷新／复用、保活与结束。中途取消或失败。让同一 run 的 11／12 与正文队列排空，再重放同一条内置命令。 | typing 每 5 秒保活并结束，工具按 run/tool-call 顺序调用。命令副作用一次，debug 重启保留，诊断失败不影响确认。 | `MessagingTests`、`CoreTests`，请求顺序、最终状态。 |
-| C-A10 CLI、Web 和 NuGet | 通过 `verify-web` 测安全边界、OpenAPI、登录、租约与收据。连接断开 SSE，再让 CLI 竞争相同目录。仓库外消费者装 NuGet，打开同目录两次。 | 错误响应脱敏且状态准确，SSE 首帧包含摘要且不改变 Inbox，第二进程拒绝占用。外部项目独立运行并恢复状态。 | `scripts/build.ps1`／`build.sh`、Web 输出及消费者记录。 |
+| C-A10 CLI、Web 和 NuGet | 通过 `verify-web` 测首页、HTTP、OpenAPI、登录探针、聊天历史、发送校验、租约与收据。连接断开 SSE，再让 CLI 竞争相同目录。仓库外消费者装 NuGet，打开同目录两次。 | 首页可打开且 API 保持本机边界。历史分页无重漏，按账号和扫码人隔离，Ack 后仍可读。浏览历史和连接 SSE 均不改变 Inbox，错误发送不写入记录，第二进程拒绝占用。外部项目独立运行并恢复状态。 | `scripts/build.ps1`／`build.sh`、Web 输出及消费者记录。 |
 
 定向回归可按 xUnit 方法名过滤。C-A04 对应 `Failed_batch_commit_keeps_cursor_context_and_inbox_unchanged_to_allow_redelivery`，C-A06 对应 `Outbound_sources_keep_original_bytes_and_choose_the_official_media_wire_types`，C-A09 对应 `Progress_is_serial_and_drain_preserves_shared_run_and_tool_identifiers`。C-A10 的 Web 登录探针仅覆盖错误或缺失会话，扫码确认由真机 C-L01 覆盖。
+
+在 `samples/Weixin.Web/editor` 依次运行 `npm ci`、`npx playwright install chromium` 和 `npm run test:web`。浏览器回归使用合成 API 响应和 WAV 样本，覆盖历史轮询时播放不中断、白名单变化时保留草稿和附件，以及缺少消息 ID 时的送达提示。
 
 ## 微信真机
 

@@ -180,13 +180,70 @@ public sealed class CoreTests
     {
         using var workspace = new Workspace();
         using var store = workspace.Store();
+        store.Configure("bot-im-bot", new AccountConfiguration { Remark = "旧绑定" });
         var delivery = Assert.Single(store.CommitBatch("bot-im-bot", new JsonArray(Message("1")), null));
         store.RecordSend("client", "bot-im-bot", "owner", delivery, "{}", "unknown", null, null);
         store.SaveAccount("replacement@im.bot", "owner", "new-token", "https://unit.test/");
-        Assert.Equal("replacement-im-bot", Assert.Single(store.Accounts()).AccountId);
+        var replaced = Assert.Single(store.Accounts());
+        Assert.Equal("replacement-im-bot", replaced.AccountId);
+        Assert.Null(replaced.Remark);
         Assert.Empty(store.Inbox(null, true));
         Assert.False(store.HasUnknownSend(delivery));
         Assert.Null(store.ResolveSend(new SendRequest { PeerId = "owner" }).ContextToken);
+    }
+
+    [Fact]
+    public async Task Account_remark_survives_restart_and_same_binding_login_until_cleared()
+    {
+        using var workspace = new Workspace();
+        using (var store = workspace.Store())
+        {
+            store.SaveAccount("second", "second-owner", "token", "https://unit.test/");
+            store.Configure("bot-im-bot", new AccountConfiguration { Remark = "  测试微信 🐱  ", ExpectedOwnerId = "owner" });
+            store.Configure("bot-im-bot", new AccountConfiguration(Debug: true));
+            store.SaveAccount("bot@im.bot", "owner", "new-token", "https://unit.test/");
+        }
+
+        await using var channel = new WeixinChannel(new WeixinOptions { StateDirectory = workspace.Path, TimeProvider = workspace.Clock });
+        var account = channel.GetAccounts().Single(a => a.AccountId == "bot-im-bot");
+        Assert.Equal("测试微信 🐱", account.Remark);
+        Assert.True(account.Debug);
+        Assert.Null(channel.GetAccounts().Single(a => a.AccountId == "second").Remark);
+        channel.ConfigureAccount("bot-im-bot", new AccountConfiguration { Remark = "  ", ExpectedOwnerId = "owner" });
+        Assert.Null(channel.GetAccounts().Single(a => a.AccountId == "bot-im-bot").Remark);
+    }
+
+    [Fact]
+    public void Switching_owner_or_deleting_binding_drops_remark_and_rejects_a_stale_owner_edit()
+    {
+        using var workspace = new Workspace();
+        using var store = workspace.Store();
+        store.Configure("bot-im-bot", new AccountConfiguration { Remark = "旧用户", ExpectedOwnerId = "owner" });
+        store.SaveAccount("bot@im.bot", "new-owner", "new-token", "https://unit.test/");
+        Assert.Null(Assert.Single(store.Accounts()).Remark);
+        Assert.Throws<InvalidOperationException>(() => store.Configure("bot-im-bot", new AccountConfiguration(Enabled: false)
+        {
+            Remark = "过期编辑", ExpectedOwnerId = "owner"
+        }));
+        Assert.True(Assert.Single(store.Accounts()).Enabled);
+        Assert.Null(Assert.Single(store.Accounts()).Remark);
+
+        store.Configure("bot-im-bot", new AccountConfiguration { Remark = "新用户", ExpectedOwnerId = "new-owner" });
+        store.DeleteAccount("bot-im-bot");
+        store.SaveAccount("bot@im.bot", "new-owner", "new-token", "https://unit.test/");
+        Assert.Null(Assert.Single(store.Accounts()).Remark);
+    }
+
+    [Fact]
+    public void Oversized_or_malformed_remark_cannot_overwrite_a_valid_remark()
+    {
+        using var workspace = new Workspace();
+        using var store = workspace.Store();
+        var valid = new string('中', 38) + "🐱";
+        store.Configure("bot-im-bot", new AccountConfiguration { Remark = valid });
+        foreach (var invalid in new[] { valid + "字", "用户\n备注", new string((char)0xD800, 1) })
+            Assert.Throws<ArgumentException>(() => store.Configure("bot-im-bot", new AccountConfiguration { Remark = invalid }));
+        Assert.Equal(valid, Assert.Single(store.Accounts()).Remark);
     }
 
     [Fact]

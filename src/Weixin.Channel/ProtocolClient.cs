@@ -11,17 +11,20 @@ namespace Weixin.Channel;
 internal sealed class ProtocolClient(HttpClient http, WeixinOptions options, CoreStore? store = null)
 {
     internal async Task<JsonObject> PostAsync(AccountRow account, string endpoint, JsonObject body,
-        TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+        TimeSpan? timeout = null, CancellationToken cancellationToken = default, bool requireSameOwner = false)
     {
         if (store is not null)
         {
-            account = store.GetAccount(account.AccountId);
-            if (!account.Enabled || account.PausedUntil > options.TimeProvider.GetUtcNow())
+            var current = store.GetAccount(account.AccountId);
+            var ownerChanged = requireSameOwner && current.OwnerId != account.OwnerId;
+            if (ownerChanged || !current.Enabled || current.PausedUntil > options.TimeProvider.GetUtcNow())
             {
-                var unavailable = new InvalidOperationException("账号已停用或暂停，未发起微信请求。");
+                var unavailable = new InvalidOperationException(ownerChanged
+                    ? "账号绑定已变更，未发起微信请求。" : "账号已停用或暂停，未发起微信请求。");
                 unavailable.Data["WeixinRequestNotSent"] = true;
                 throw unavailable;
             }
+            account = current;
         }
         body["base_info"] = new JsonObject { ["channel_version"] = "2.4.10", ["bot_agent"] = SanitizeBotAgent(options.BotAgent) };
         var response = await RequestAsync(new Uri(account.BaseUrl), endpoint, body, account.Token,

@@ -1,0 +1,17 @@
+{
+  "name": "weixin-web-markdown",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "test:web": "node --test web.test.mjs"
+  },
+  "dependencies": {
+    "@milkdown/kit": "7.23.0",
+    "markdown-it": "15.0.3",
+    "prosemirror-view": "1.43.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.60.0"
+  }
+}

@@ -40,6 +40,7 @@ public sealed partial class WeixinChannel : IAsyncDisposable
             _store.RecoverInterruptedSends();
             _protocol = new ProtocolClient(_http, options, _store);
             InitializeMessaging();
+            DeleteConversationDirectory(ConversationStagingDirectory);
         }
         catch
         {
@@ -57,7 +58,10 @@ public sealed partial class WeixinChannel : IAsyncDisposable
             return PublicAccount(a, _runs.ContainsKey(a.AccountId)) with { LastActivityAt = status.Activity, LastInboundAt = status.Inbound, LastError = status.Error };
         }).ToArray();
     });
-    private static WeixinAccount PublicAccount(AccountRow account, bool running = false) => new(account.AccountId, account.OwnerId, account.BaseUrl, account.Enabled, account.Debug, account.Allowlist, account.PausedUntil, running);
+    private static WeixinAccount PublicAccount(AccountRow account, bool running = false) => new(account.AccountId, account.OwnerId, account.BaseUrl, account.Enabled, account.Debug, account.Allowlist, account.PausedUntil, running)
+    {
+        Remark = account.Remark
+    };
     public void ConfigureAccount(string accountId, AccountConfiguration configuration)
     {
         var stop = ReadState(() =>
@@ -95,6 +99,7 @@ public sealed partial class WeixinChannel : IAsyncDisposable
         foreach (var entry in _store.Inbox(accountId, true)) DeleteDeliveryMedia(entry.DeliveryId);
         _store.DeleteAccount(accountId);
         DeleteMessagingAccount(accountId);
+        DeleteConversationDirectory(ConversationAccountDirectory(accountId));
         _status.TryRemove(accountId, out _);
     }
 
@@ -230,6 +235,8 @@ public sealed partial class WeixinChannel : IAsyncDisposable
     public IReadOnlyList<InboxEntry> GetInbox(string? accountId = null, bool includeCompleted = false) =>
         ReadState(() => _store.Inbox(accountId, includeCompleted));
     public IReadOnlyList<SendSegment> GetSendSegments(string deliveryId) => ReadState(() => _store.SendSegments(deliveryId));
+    public OwnerConversation GetOwnerConversation(string accountId, string? before = null) =>
+        ReadState(() => _store.ReadOwnerConversation(accountId, before));
 
     public Task<InboundMessage?> ClaimAsync(string? accountId = null, CancellationToken cancellationToken = default) =>
         TrackOperationAsync(token => ClaimCoreAsync(accountId, false, token), cancellationToken);
@@ -254,7 +261,7 @@ public sealed partial class WeixinChannel : IAsyncDisposable
             {
                 var account = _store.GetAccount(row.AccountId);
                 var raw = JsonNode.Parse(row.Raw)!.AsObject();
-                var denial = !Authorized(account, row.PeerId) ? "unauthorized" : !string.IsNullOrEmpty(ProtocolClient.Text(raw["group_id"])) ? "group-unsupported" : ProtocolClient.Number(raw["message_type"], 1) != 1 ? "non-user-message" : null;
+                var denial = account.InboundDenial(row.PeerId, raw);
                 if (denial is not null)
                 {
                     _store.Complete(row.DeliveryId, row.LeaseId, true, denial);
@@ -288,8 +295,6 @@ public sealed partial class WeixinChannel : IAsyncDisposable
             }
         }
     }
-    private static bool Authorized(AccountRow account, string peer) => account.Allowlist.Length > 0 ? account.Allowlist.Contains(peer, StringComparer.Ordinal) : account.OwnerId.Length > 0 && account.OwnerId == peer;
-
     private async Task<bool> BuiltinAsync(InboxRow message, JsonObject raw, CancellationToken cancellationToken)
     {
         var textItem = (raw["item_list"] as JsonArray ?? []).FirstOrDefault(item => ProtocolClient.Number(item?["type"]) == 1 && item?["text_item"]?["text"] is not null);

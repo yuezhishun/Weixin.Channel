@@ -109,10 +109,33 @@ public sealed partial class WeixinChannel
 
     public Task<SendResult> SendAsync(SendRequest request, CancellationToken cancellationToken = default) =>
         TrackOperationAsync(token => SendCoreAsync(request, token), cancellationToken);
-    private async Task<SendResult> SendCoreAsync(SendRequest request, CancellationToken cancellationToken)
+
+    public Task<SendResult> SendOwnerMessageAsync(string accountId, string ownerId, string text, CancellationToken cancellationToken = default) =>
+        SendOwnerMessageAsync(accountId, ownerId, text, null, null, cancellationToken);
+
+    public Task<SendResult> SendOwnerMessageAsync(string accountId, string ownerId, string? text, string? media, string? replyDeliveryId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
+        if (media is null) ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        else if (!Path.IsPathFullyQualified(media)) throw new ArgumentException("媒体必须是已暂存的本地文件。", nameof(media));
+        if (replyDeliveryId is not null) ArgumentException.ThrowIfNullOrWhiteSpace(replyDeliveryId);
+        return TrackOperationAsync(token => SendCoreAsync(new SendRequest
+        {
+            AccountId = CoreStore.NormalizeAccountId(accountId), PeerId = ownerId,
+            Text = string.IsNullOrWhiteSpace(text) ? null : text, Media = media, DeliveryId = replyDeliveryId
+        }, token, ownerScoped: true), cancellationToken);
+    }
+
+    private async Task<SendResult> SendCoreAsync(SendRequest request, CancellationToken cancellationToken, bool ownerScoped = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+        var expectedAccount = request.AccountId;
+        var expectedOwner = request.PeerId;
+        var expectedDelivery = request.DeliveryId;
+        var expectedMedia = request.Media;
         request = request with { Text = Media.FilterMarkdown(request.Text ?? "") };
         if (_options.BeforeSend is not null)
         {
@@ -121,7 +144,7 @@ public sealed partial class WeixinChannel
                 var changed = await _options.BeforeSend(request, cancellationToken).ConfigureAwait(false);
                 if (changed is null)
                 {
-                    var cancelled = _store.ResolveSend(request);
+                    var cancelled = ResolveTarget();
                     return new SendResult(cancelled.Account.AccountId, cancelled.PeerId, "cancelled", []);
                 }
                 request = changed;
@@ -129,21 +152,28 @@ public sealed partial class WeixinChannel
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex) { Log("发送前 hook 失败，保留原发送内容：" + ex.GetType().Name); }
         }
-        var target = _store.ResolveSend(request);
+        var target = ResolveTarget();
         EnsureAccountAvailable(target.Account);
         if (string.IsNullOrEmpty(request.Text) && string.IsNullOrWhiteSpace(request.Media)) return new SendResult(target.Account.AccountId, target.PeerId, "cancelled", []);
-        if (_store.HasUnknownSend(request.DeliveryId))
+        // 网页回复借用入站消息的上下文，发送结果不参与 Inbox 的消费与重试。
+        var inboxDeliveryId = ownerScoped ? null : request.DeliveryId;
+        if (inboxDeliveryId is not null && _store.HasUnknownSend(inboxDeliveryId))
         {
             if (!request.AllowUnknownRetry) throw new InvalidOperationException("此 DeliveryId 存在发送结果未知的记录，请先核查；显式重试可能造成重复消息。");
             Log("已显式允许未知发送重试，可能产生重复消息。");
-            _store.ApproveUnknownSends(request.DeliveryId!);
+            _store.ApproveUnknownSends(inboxDeliveryId);
         }
         var parts = new List<SendSegment>();
         var chunks = Media.Chunk(request.Text ?? "", _options.TextChunkSize);
+        var plainReply = request.DeliveryId is not null && string.IsNullOrEmpty(request.RunId) && string.IsNullOrWhiteSpace(request.Media);
         foreach (var chunk in chunks)
         {
+            var clientId = plainReply
+                ? FormattableString.Invariant($"openclaw-weixin:{_options.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()}-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4))}")
+                : null;
             var segment = await SendItemAsync(request, target.Account, target.PeerId, target.ContextToken,
-                new JsonObject { ["type"] = 1, ["text_item"] = new JsonObject { ["text"] = chunk } }, chunk, null, cancellationToken).ConfigureAwait(false);
+                new JsonObject { ["type"] = 1, ["text_item"] = new JsonObject { ["text"] = chunk } }, chunk, null, cancellationToken,
+                inboxDeliveryId: inboxDeliveryId, clientId: clientId, requireSameOwner: ownerScoped).ConfigureAwait(false);
             parts.Add(segment);
             if (segment.Status != "success") break;
         }
@@ -166,9 +196,11 @@ public sealed partial class WeixinChannel
                     ["filekey"] = fileKey, ["media_type"] = type == 2 ? 1 : type == 5 ? 2 : 3,
                     ["to_user_id"] = target.PeerId, ["rawsize"] = bytes.Length, ["rawfilemd5"] = Convert.ToHexStringLower(MD5.HashData(bytes)),
                     ["filesize"] = encryptedSize, ["no_need_thumb"] = true, ["aeskey"] = Convert.ToHexStringLower(key)
-                }, null, cancellationToken).ConfigureAwait(false);
+                }, null, cancellationToken, requireSameOwner: ownerScoped).ConfigureAwait(false);
                 if (ProtocolClient.Error(upload) == -14) _store.Pause(target.Account.AccountId, TimeSpan.FromHours(1));
                 if (ProtocolClient.Error(upload) != 0) throw new InvalidDataException("微信拒绝媒体上传申请。");
+                if (ownerScoped && _store.GetAccount(target.Account.AccountId).OwnerId != target.Account.OwnerId)
+                    throw new InvalidOperationException("账号绑定已变更，未上传媒体。");
                 var parameter = await Media.UploadAsync(_http, _options.CdnBaseUrl, upload, fileKey, bytes, key, cancellationToken, _options.MediaTimeout, _options.TimeProvider).ConfigureAwait(false);
                 var media = new JsonObject { ["encrypt_query_param"] = parameter, ["aes_key"] = Convert.ToBase64String(Encoding.ASCII.GetBytes(Convert.ToHexStringLower(key))), ["encrypt_type"] = 1 };
                 var content = new JsonObject { ["media"] = media };
@@ -177,14 +209,16 @@ public sealed partial class WeixinChannel
                 else { content["file_name"] = Path.GetFileName(path); content["len"] = bytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture); }
                 var item = new JsonObject { ["type"] = type, [type == 2 ? "image_item" : type == 5 ? "video_item" : "file_item"] = content };
                 var attachment = new WeixinAttachment(type == 2 ? "image" : type == 5 ? "video" : "file", path, mime, Path.GetFileName(path));
-                parts.Add(await SendItemAsync(request, target.Account, target.PeerId, target.ContextToken, item, Media.Label(type), attachment, cancellationToken).ConfigureAwait(false));
+                parts.Add(await SendItemAsync(request, target.Account, target.PeerId, target.ContextToken, item, Media.Label(type), attachment, cancellationToken,
+                    inboxDeliveryId: inboxDeliveryId, requireSameOwner: ownerScoped).ConfigureAwait(false));
             }
             catch (Exception ex)
             {
                 // 上传尚未调用 sendmessage，失败可以安全重试；caption 的成功记录仍保留。
                 var clientId = "weixin-" + Guid.NewGuid().ToString("N");
                 var error = "媒体准备失败：" + ProtocolClient.Classify(ex);
-                _store.RecordSend(clientId, target.Account.AccountId, target.PeerId, request.DeliveryId, "{}", "failed", null, error);
+                if (!_store.RecordSend(clientId, target.Account.AccountId, target.PeerId, inboxDeliveryId, "{}", "failed", null, error,
+                    requiredOwner: ownerScoped ? target.Account.OwnerId : null)) error = "账号绑定已变更，未发送附件。";
                 parts.Add(new SendSegment(clientId, null, "failed", error));
             }
             finally
@@ -195,6 +229,17 @@ public sealed partial class WeixinChannel
         }
         var status = parts.Any(p => p.Status == "unknown") ? "unknown" : parts.All(p => p.Status == "success") ? "success" : parts.Any(p => p.Status == "success") ? "partial" : "failed";
         return await NotifySentAsync(new SendResult(target.Account.AccountId, target.PeerId, status, parts), cancellationToken).ConfigureAwait(false);
+
+        (AccountRow Account, string PeerId, string? ContextToken) ResolveTarget()
+        {
+            var selected = _store.ResolveSend(request, ownerScoped);
+            if (ownerScoped && (selected.Account.AccountId != expectedAccount || selected.Account.OwnerId != expectedOwner ||
+                selected.PeerId != expectedOwner || request.DeliveryId != expectedDelivery || request.Media != expectedMedia))
+                throw new InvalidOperationException("只能向此账号当前绑定的微信发送指定消息和附件。");
+            if (ownerScoped && selected.ContextToken is null)
+                throw new InvalidOperationException("请用当前绑定的微信先给机器人发一条消息，以建立会话。");
+            return selected;
+        }
     }
 
     private async Task<SendResult> NotifySentAsync(SendResult result, CancellationToken ct)
@@ -209,9 +254,10 @@ public sealed partial class WeixinChannel
     }
 
     private async Task<SendSegment> SendItemAsync(SendRequest request, AccountRow account, string peer, string? token,
-        JsonObject item, string body, WeixinAttachment? attachment, CancellationToken ct, bool auxiliary = false)
+        JsonObject item, string body, WeixinAttachment? attachment, CancellationToken ct, string? inboxDeliveryId = null, string? clientId = null,
+        bool requireSameOwner = false)
     {
-        var clientId = "weixin-" + Guid.NewGuid().ToString("N");
+        clientId ??= "weixin-" + Guid.NewGuid().ToString("N");
         var message = new JsonObject
         {
             ["from_user_id"] = "", ["to_user_id"] = peer, ["client_id"] = clientId,
@@ -222,14 +268,15 @@ public sealed partial class WeixinChannel
         var payload = new JsonObject { ["msg"] = message };
         var raw = payload.ToJsonString();
         ct.ThrowIfCancellationRequested();
-        var delivery = auxiliary ? null : request.DeliveryId;
-        _store.RecordSend(clientId, account.AccountId, peer, delivery, raw, "sending", null, null);
+        var requiredOwner = requireSameOwner ? account.OwnerId : null;
+        if (!_store.RecordSend(clientId, account.AccountId, peer, inboxDeliveryId, raw, "sending", null, null, requiredOwner))
+            return new SendSegment(clientId, null, "failed", "账号绑定已变更，未发起微信请求。");
         string? serverId = null;
         var status = "unknown";
         string? error = null;
         try
         {
-            var response = await _protocol.PostAsync(account, "ilink/bot/sendmessage", payload, null, ct).ConfigureAwait(false);
+            var response = await _protocol.PostAsync(account, "ilink/bot/sendmessage", payload, null, ct, requireSameOwner).ConfigureAwait(false);
             if (ProtocolClient.Error(response) != 0)
             {
                 if (ProtocolClient.Error(response) == -14) _store.Pause(account.AccountId, TimeSpan.FromHours(1));
@@ -244,13 +291,14 @@ public sealed partial class WeixinChannel
                 ex.Data.Contains("WeixinRequestNotSent") ? "failed" : "unknown";
             error = "发送未完成：" + ProtocolClient.Classify(ex) + (status == "unknown" ? "，可能已送达，请核查后再重试。" : "");
         }
-        try { _store.RecordSend(clientId, account.AccountId, peer, delivery, raw, status, serverId, error); }
+        bool stored;
+        try { stored = _store.RecordSend(clientId, account.AccountId, peer, inboxDeliveryId, raw, status, serverId, error, requiredOwner); }
         catch (Exception ex)
         {
             Log("发送结果持久化失败，原 sending 记录必须按未知结果核查：" + ex.GetType().Name);
             return new SendSegment(clientId, serverId, "unknown", "发送结果未能持久化，必须核查，不能自动重发。");
         }
-        if (status == "success" && !string.IsNullOrEmpty(serverId)) _quotes.Put(account.AccountId, peer, serverId, body, attachment, _options.TimeProvider.GetUtcNow());
+        if (stored && status == "success" && !string.IsNullOrEmpty(serverId)) _quotes.Put(account.AccountId, peer, serverId, body, attachment, _options.TimeProvider.GetUtcNow());
         return new SendSegment(clientId, serverId, status, error);
     }
 
@@ -367,7 +415,7 @@ public sealed partial class WeixinChannel
                 };
                 try
                 {
-                    var result = await SendItemAsync(request, target.Account, target.PeerId, target.ContextToken, item, "", null, cancellationToken, true).ConfigureAwait(false);
+                    var result = await SendItemAsync(request, target.Account, target.PeerId, target.ContextToken, item, "", null, cancellationToken).ConfigureAwait(false);
                     if (result.Status != "success") Log("工具进度发送未成功：" + result.Status);
                 }
                 catch (Exception ex) { Log("工具进度发送失败：" + ex.GetType().Name); }

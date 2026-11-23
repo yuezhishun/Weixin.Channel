@@ -26,7 +26,7 @@ $server = Start-Process -FilePath $serverCommand -ArgumentList $serverArguments 
 $client = [Net.Http.HttpClient]::new()
 $client.Timeout = [TimeSpan]::FromSeconds(10)
 $base = 'http://127.0.0.1:3083'
-function Assert-Http([string]$Path, [int]$Expected, [hashtable]$Headers = @{ 'x-weixin-request' = '1' }, [string]$Method = 'GET', [string]$Body = '') {
+function Assert-Http([string]$Path, [int]$Expected, [hashtable]$Headers = @{ 'x-weixin-request' = '1' }, [string]$Method = 'GET', [string]$Body = '', [string]$MediaType = '') {
     $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($Method), $base + $Path)
     foreach ($name in $Headers.Keys) { $request.Headers.TryAddWithoutValidation($name, [string]$Headers[$name]) | Out-Null }
     if ($Body) { $request.Content = [Net.Http.StringContent]::new($Body, [Text.Encoding]::UTF8, 'application/json') }
@@ -35,6 +35,7 @@ function Assert-Http([string]$Path, [int]$Expected, [hashtable]$Headers = @{ 'x-
         $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         if ([int]$response.StatusCode -ne $Expected) { throw "$Method $Path 期望 $Expected，实际 $([int]$response.StatusCode)：$text" }
         if ($Expected -ge 400 -and $response.Content.Headers.ContentType.MediaType -ne 'application/problem+json') { throw "$Path 未返回 ProblemDetails" }
+        if ($MediaType -and $response.Content.Headers.ContentType.MediaType -notmatch $MediaType) { throw "$Path 返回了错误的内容类型" }
         "$Method $Path -> $Expected" | Tee-Object -FilePath (Join-Path $evidence 'checks.log') -Append | Out-Host
         return $text
     }
@@ -47,6 +48,16 @@ try {
         try { $null = Assert-Http '/health' 200; $ready = $true; break } catch { Start-Sleep -Milliseconds 100 }
     }
     if (-not $ready) { throw 'Web 未在5秒内就绪。' }
+    $null = Assert-Http '/' 200 @{} -MediaType '^text/html$'
+    $null = Assert-Http '/app.js' 200 @{} -MediaType '^(text|application)/javascript$'
+    $null = Assert-Http '/app.css' 200 @{} -MediaType '^text/css$'
+    $null = Assert-Http '/markdown.js' 200 @{} -MediaType '^(text|application)/javascript$'
+    $null = Assert-Http '/markdown.css' 200 @{} -MediaType '^text/css$'
+    $null = Assert-Http '/' 403 @{ Host = 'evil.example:3083' }
+    $null = Assert-Http '/app.js' 403 @{ Origin = 'https://evil.example' }
+    $null = Assert-Http '/api/logins/missing/qr' 403 @{}
+    $null = Assert-Http '/api/accounts/missing/messages' 403 @{}
+    $null = Assert-Http '/api/accounts/missing/messages' 403 @{} 'POST' '{"ownerId":"test","text":"test"}'
     $null = Assert-Http '/health' 403 @{}
     $null = Assert-Http '/health' 403 @{ 'x-weixin-request' = '1'; Host = 'evil.example:3083' }
     $null = Assert-Http '/health' 403 @{ 'x-weixin-request' = '1'; Host = '127.0.0.1:9999' }
@@ -62,7 +73,7 @@ try {
     $null = Assert-Http '/missing' 404
     $null = Assert-Http '/openapi/v1.json' 200
     & $Dotnet run --file (Join-Path $projectRoot 'tests/tools/WebSmokeFixture.cs') -c Release -- $state $evidence 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'fixture.log') | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw '非空 SSE / OpenAPI schema / 持久收据验证失败。' }
+    if ($LASTEXITCODE -ne 0) { throw 'Web 合成数据验证失败，请检查 fixture.log。' }
     $conflict = & $cliCommand @cliArguments status --state $state 2>&1
     if ($LASTEXITCODE -eq 0 -or ($conflict -join '') -notmatch '状态目录正被另一个进程使用') { throw 'CLI/Web 状态目录冲突没有明确失败。' }
     $conflict | Set-Content -LiteralPath (Join-Path $evidence 'directory-conflict.log')
@@ -75,5 +86,5 @@ finally {
 $cliReceipts = & $cliCommand @cliArguments receipts web-receipt-fixture --state $state
 if ($LASTEXITCODE -ne 0 -or ($cliReceipts | ConvertFrom-Json).Count -ne 3 -or ($cliReceipts -join '') -match 'FIXTURE_SECRET_MUST_NOT_APPEAR') { throw 'CLI未正确恢复脱敏持久收据。' }
 $cliReceipts | Set-Content -LiteralPath (Join-Path $evidence 'cli-receipts.json')
-"HTTP边界、ProblemDetails、OpenAPI响应schema、非空SSE无副作用、租约、持久收据与跨进程目录互斥全部通过；未请求真实微信服务。" | Set-Content -LiteralPath (Join-Path $evidence 'result.txt')
+"首页、HTTP 边界、OpenAPI、账号聊天接口、SSE、租约、持久收据与跨进程目录互斥全部通过，未请求真实微信服务。" | Set-Content -LiteralPath (Join-Path $evidence 'result.txt')
 Write-Host "Web 验证通过：$evidence"
